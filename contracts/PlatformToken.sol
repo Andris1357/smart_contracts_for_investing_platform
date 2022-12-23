@@ -7,7 +7,7 @@ import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 contract PlatformToken is ERC20 { // this is a dummy contract name
     string private constant _name = "PlatformToken";
     string private constant _symbol = "DIT"; // I: let it have a symbol derived from "Donate-Invest Token" as a temporary label
-    uint public token_current_price;
+    // uint public token_current_price;
     uint128 private constant initial_supply = 10 ** 10;
     uint256 internal constant period_mint_amount = 10 ** 4;
     uint128 internal constant minting_period_sec = 30 * 24 * 3600;

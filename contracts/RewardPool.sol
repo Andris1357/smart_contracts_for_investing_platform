@@ -19,11 +19,17 @@ contract RewardPool {
     address private immutable investing_contract_address;
     uint32 public constant token_price = 5000; // in wei; later substitute for price of token derived from PancakeSwap BNB liquidity pair via an oracle
 
+    event emitOwnerSignature (bytes32 channel_owner_signature_);
+
     constructor () {
         owner_address = msg.sender;
         platform_token = new PlatformToken(address(this)); // token contract will only be deployed once
         token_address = address(platform_token);
-        channel_contract = new Channels(platform_token, address(this));
+        channel_contract = new Channels(
+            platform_token, 
+            owner_address,
+            address(this)
+        );
         channel_contract_address = address(channel_contract);
         investing_contract = new InvestmentMechanism(
             platform_token, 
@@ -39,29 +45,44 @@ contract RewardPool {
     fallback() external payable {}
 
     modifier callOnlyFromWebsite() {
-        require (msg.sender == owner_address);
+        require (
+            msg.sender == owner_address,
+            "Only the website administrator can call this function."
+        );
         _;
     }
-    //TD: git add remote
-    event currentPriceRequested(
+
+    modifier channelMustHaveAddress(string memory channel_name_) {
+        require (
+            channel_contract.getChannelByName(channel_name_).registered_withdraw_address != address(0),
+            "There is no address registered for this channel yet. "
+            'An address can be registered by pressing the button "Change/set withdraw address using signature".'
+        );
+        _;
+    }
+    
+    event currentPriceRequested (
         uint token_amount_,
         address investor_address_
     );
 
     function setChannelScore (
-        string memory channel_name_, uint32 new_score_
+        string memory channel_name_, 
+        uint32 new_score_
     ) callOnlyFromWebsite public view {
         channel_contract.setChannelScore(channel_name_, new_score_);
     }
 
     function setChannelModifierValue (
-        string memory channel_name_, int64 new_value_
+        string memory channel_name_, 
+        int64 new_value_
     ) callOnlyFromWebsite public view {
         channel_contract.setChannelModifierValue(channel_name_, new_value_);
     }
 
     function registerNewChannel (string calldata channel_name_) public callOnlyFromWebsite {
-        channel_contract.registerNewChannel(channel_name_);
+        bytes32 channel_signature = channel_contract.registerNewChannel(channel_name_);
+        emit emitOwnerSignature(channel_signature); // will be caught by JS and sent to the owner using such encryption that the operator of the platform would not be able to access it during said process
     }
 
     function mintNewTokens () public callOnlyFromWebsite {
@@ -69,34 +90,44 @@ contract RewardPool {
     }
 
     function buyTokens (uint256 amount_to_buy_) public payable { // operated by user
-        require (msg.value >= amount_to_buy_ * token_price * 1 wei, "You have not committed enough ETH to the transaction.");
+        require (
+            msg.value >= amount_to_buy_ * token_price * 1 wei, 
+            "You have not committed enough ETH to the transaction."
+        );
         platform_token.transfer(payable(msg.sender), amount_to_buy_); // transfer tokens to user in exchange for ETH received
     }
-    function sellTokens (uint256 amount_to_sell_) public payable { // operated by user
-        require (platform_token.balanceOf(msg.sender) >= amount_to_sell_, "Token balance is too low.");
-        payable(msg.sender).transfer(amount_to_sell_ * uint256(token_price) * 1 wei); // transfers ETH (later BNB) to user wallet
-    }
 
-    function withdrawChannelFunds (uint256 amount_, string memory channel_name_) public payable { // implements Channels.withdrawChannelDonations
+    function sellTokens (uint256 amount_to_sell_) public payable { // operated by user
         require (
-            channel_contract.getChannelByName(channel_name_).registered_withdraw_address != address(0),
-            "There is no address registered for this channel yet. "
-            'An address can be registered by pressing the button "Change/set withdraw address using signature".'
+            platform_token.balanceOf(msg.sender) >= amount_to_sell_, 
+            "Token balance is too low."
         );
+        platform_token.approve(address(this), amount_to_sell_);
+        payable(msg.sender).transfer(amount_to_sell_ * uint256(token_price) * 1 wei); // transfers ETH (later BNB) to user wallet
+        platform_token.transferFrom(msg.sender, address(this), amount_to_sell_);
+    } // TD: test if `token.balanceOf(<address>)` decreases after current change (ßtransferFrom)
+
+    function withdrawChannelFunds (
+        uint256 amount_, 
+        string memory channel_name_
+    ) public payable channelMustHaveAddress(channel_name_) { // implements Channels.withdrawChannelDonations
         Channel memory tmp_channel = channel_contract.getChannelByName(channel_name_);
         require (msg.sender == tmp_channel.registered_withdraw_address);
+
         address payable tmp_withdraw_address = payable(tmp_channel.registered_withdraw_address);
         channel_contract.withdrawChannelDonations(amount_, channel_name_, tmp_withdraw_address); // this function contains 3 requirements that will make this func fail as well if not met
         tmp_withdraw_address.transfer(amount_ * uint256(token_price) * 1 wei);
     }
-    function withdrawChannelTokens (uint256 amount_, string memory channel_name_) public {
-        require (
-            channel_contract.getChannelByName(channel_name_).registered_withdraw_address != address(0),
-            "There is no address registered for this channel yet. "
-            'An address can be registered by pressing the button "Change/set withdraw address using signature".'
-        );
+
+    function withdrawChannelTokens (
+        uint256 amount_, 
+        string memory channel_name_
+    ) public channelMustHaveAddress(channel_name_) {
         Channel memory tmp_channel = channel_contract.getChannelByName(channel_name_);
-        require (msg.sender == tmp_channel.registered_withdraw_address); // only channel owner
+        require (
+            msg.sender == tmp_channel.registered_withdraw_address,
+            "You can only call this function with the address of the wallet that is registered for this channel."
+        );
         channel_contract.withdrawChannelDonations(amount_, channel_name_, tmp_channel.registered_withdraw_address);
         platform_token.transfer(tmp_channel.registered_withdraw_address, amount_);
     }
@@ -128,7 +159,4 @@ contract RewardPool {
         }
         payable(investor_address_).transfer(token_amount_ * current_price_ * 1 wei);
     }
-
-    // D: implem user<=>token funcs here
-    // D: sends ETH (later BNB) to ChannelOwner upon request on Channels contract by external wallet (of the owner's)
 }

@@ -153,7 +153,7 @@ contract InvestmentMechanism { // it did not show abstract error when inheriting
         );
     }
 
-    function calculateCurrentReward (
+    function calculateCurrentReward ( // TD: test all funcs accessing investment & channel funds /\ invest() works
         bytes32 subscription_id_, int64 channel_modifier_10_5_
     ) private view returns (uint out_reward_) { // \/: use '~' ß uint<=>int casting
         // D: channel modifier sh only be calculated at the beginning of inv period & will stay th way until end; MT: it sh fluctuate to allow ß [++] diverse speculation
