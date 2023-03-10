@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: UNLICENSED
+// SPDX-License-Identifier: GPL-3.0
 pragma solidity >=0.7.0 <0.9.0;
 
 import "./Channels.sol";
@@ -97,22 +97,30 @@ contract RewardPool {
         platform_token.transfer(payable(msg.sender), amount_to_buy_); // transfer tokens to user in exchange for ETH received
     }
 
+    // Has to be called before ßsellTokens()
+    function approveSellTokens (uint amount_) public {
+        platform_token.approve(address(this), amount_);
+    }
+    
     function sellTokens (uint256 amount_to_sell_) public payable { // operated by user
         require (
-            platform_token.balanceOf(msg.sender) >= amount_to_sell_, 
+            platform_token.balanceOf(msg.sender) >= amount_to_sell_,
             "Token balance is too low."
         );
-        platform_token.approve(address(this), amount_to_sell_);
+        approveSellTokens(amount_to_sell_);
         payable(msg.sender).transfer(amount_to_sell_ * uint256(token_price) * 1 wei); // transfers ETH (later BNB) to user wallet
         platform_token.transferFrom(msg.sender, address(this), amount_to_sell_);
-    } // TD: test if `token.balanceOf(<address>)` decreases after current change (ßtransferFrom)
+    }
 
     function withdrawChannelFunds (
         uint256 amount_, 
         string memory channel_name_
     ) public payable channelMustHaveAddress(channel_name_) { // implements Channels.withdrawChannelDonations
         Channel memory tmp_channel = channel_contract.getChannelByName(channel_name_);
-        require (msg.sender == tmp_channel.registered_withdraw_address);
+        require (
+            msg.sender == tmp_channel.registered_withdraw_address,
+            "You can only withdraw from the address that is registered for this channel."
+        );
 
         address payable tmp_withdraw_address = payable(tmp_channel.registered_withdraw_address);
         channel_contract.withdrawChannelDonations(amount_, channel_name_, tmp_withdraw_address); // this function contains 3 requirements that will make this func fail as well if not met
@@ -148,7 +156,7 @@ contract RewardPool {
         emit currentPriceRequested(token_amount_, msg.sender);
     }
 
-    // Called after receiving priceRequested event, with the parameters extracted from it + live price from an oracle
+    // Called after receiving priceRequested event (JS stores the emitted data), with the parameters extracted from it + live price from an oracle
     function routeUserTrade(
         uint token_amount_, 
         address investor_address_,

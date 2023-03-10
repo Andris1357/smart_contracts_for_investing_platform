@@ -57,7 +57,8 @@ contract Channels {
     }
 
     function setChannelScore (
-        string memory channel_name_, uint32 new_score_
+        string memory channel_name_, 
+        uint32 new_score_
     ) onlyAuthorized public view {
         Channel memory temp_channel = getChannelByName(channel_name_);
         temp_channel.score = new_score_ * uint64(10) ** score_exponent_factor;
@@ -104,7 +105,8 @@ contract Channels {
         // Verifies if channel address is being modified by its rightful owner
         require (
             channels[channel_name_].registered_withdraw_address != address(0),
-            "There is no address registered for this channel yet. An address can only be registered by using the function that takes the signature of the channel as an input."
+            "There is no address registered for this channel yet. "
+            "An address can only be registered by using the function that takes the signature of the channel as an input."
         );
         require (
             msg.sender == channels[channel_name_].registered_withdraw_address,

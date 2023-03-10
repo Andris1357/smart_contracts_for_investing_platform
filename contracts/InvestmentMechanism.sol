@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0
 pragma solidity >=0.7.0 <0.9.0;
 
-import "@prb/math/contracts/PRBMathSD59x18.sol";
+// import "@prb/math/contracts/PRBMathSD59x18.sol";
+import "solidity-math-utils/project/contracts/AnalyticMath.sol";
 
 import "./Channels.sol";
 import "./PlatformToken.sol";
@@ -9,12 +10,13 @@ import "./RewardPool.sol";
 
 contract InvestmentMechanism { // it did not show abstract error when inheriting fr RP <= bc it did not use a any func of it?
     // \/: there may be issues with some implementation <-> there is no func used fr w/i CH
-    using PRBMathSD59x18 for int256;
+    // using PRBMathSD59x18 for int256;
+    AnalyticMath private immutable MathLibrary;
     
     uint8 constant private default_donation_percent = 1;
     uint8 constant private platform_fee_10_3 = 5; //counting by multiplying the original amount by some amount (10 ** 3 in this case) to be able to express floats
     uint constant private early_unlock_penalty_per_day_10_3 = 30;
-    uint8 constant private default_monthly_interest_10_3 = 35; //if channel score stays the same, investor will earn [invested amount (after cuts)] * [default interest]
+    uint8 constant private default_daily_interest_10_3 = 2; //if channel score stays the same, investor will earn [invested amount (after cuts)] * [default interest]
     uint32 public minimum_investment = 10000; //will later be assigned based on how many tokens would be minted and maybe also based on their current USD price
     address private investor;
     
@@ -23,7 +25,7 @@ contract InvestmentMechanism { // it did not show abstract error when inheriting
     RewardPool private immutable operator_contract;
     PlatformToken private immutable platform_token;
     Channels private immutable channels_contract;
-    // variables storing Channels and PT are available via inheritance fr RP
+    // variables storing Channels and PT are available via being received from in RP constructor
 
     // creates enum of lock periods to have greater control of inputs
     enum LockPeriod { // TD: test inheritance on a small scale & /\ apply
@@ -53,6 +55,14 @@ contract InvestmentMechanism { // it did not show abstract error when inheriting
     mapping (LockPeriod => uint32) duration_bonus_ratios;
     uint32[5] private duration_bonuses_10_5;
 
+    event transactionReceipt (
+        bytes32 subscription_id_,
+        address indexed investor_, 
+        address indexed beneficiary_,
+        uint128 donated_,
+        uint128 invested_
+    );
+
     constructor (
         PlatformToken token_, 
         Channels channels_contract_, 
@@ -60,6 +70,9 @@ contract InvestmentMechanism { // it did not show abstract error when inheriting
         RewardPool operator_contract_,
         address owner_address_
     ) {
+        MathLibrary = new AnalyticMath();
+        MathLibrary.init();
+        
         platform_token = token_;
         operator_address = operator_address_;
         channels_contract = channels_contract_;
@@ -84,14 +97,6 @@ contract InvestmentMechanism { // it did not show abstract error when inheriting
         _;
     }
 
-    event transactionReceipt (
-        bytes32 subscription_id_,
-        address indexed investor_, 
-        address indexed beneficiary_,
-        uint128 donated_,
-        uint128 invested_
-    );
-
     modifier investorAccess (bytes32 subscription_id_) {
         require (
             msg.sender == active_investments[subscription_id_].investor_address,
@@ -106,8 +111,11 @@ contract InvestmentMechanism { // it did not show abstract error when inheriting
     }
 
     function investInChannel (
-        uint128 commited_funds_, uint16 donation_modifier_, uint8 risk_modifier_100_, 
-        LockPeriod lock_duration_, string memory channel_name_
+        uint128 commited_funds_, 
+        uint16 donation_modifier_, 
+        uint8 risk_modifier_100_, 
+        LockPeriod lock_duration_, 
+        string memory channel_name_
     ) public {
         // lock_duration_ is converted in JS from UI options {30 days, 60 days, 90 days etc} into an integer of seconds
         require (0 < donation_modifier_ && donation_modifier_ <= 500, "Modifier value out of bounds");
@@ -154,8 +162,9 @@ contract InvestmentMechanism { // it did not show abstract error when inheriting
     }
 
     function calculateCurrentReward ( // TD: test all funcs accessing investment & channel funds /\ invest() works
-        bytes32 subscription_id_, int64 channel_modifier_10_5_
-    ) private view returns (uint out_reward_) { // \/: use '~' ß uint<=>int casting
+        bytes32 subscription_id_, 
+        int64 channel_modifier_10_5_
+    ) private view returns (uint) { // \/: use '~' ß uint<=>int casting
         // D: channel modifier sh only be calculated at the beginning of inv period & will stay th way until end; MT: it sh fluctuate to allow ß [++] diverse speculation
         Channel memory channel = channels_contract.getChannelByName(
             active_investments[subscription_id_].channel_name
@@ -167,7 +176,6 @@ contract InvestmentMechanism { // it did not show abstract error when inheriting
         ) / investment_instance.initial_score;
         uint investment = investment_instance.invested_funds;
         uint256 lock_max_duration = investment_instance.lock_normal_end - investment_instance.lock_start;
-        
         uint256 passed_duration;
 
         if (block.timestamp < investment_instance.lock_normal_end) {
@@ -175,16 +183,19 @@ contract InvestmentMechanism { // it did not show abstract error when inheriting
         }
         else {
             passed_duration = lock_max_duration;
-        }
+        } //TD: chai
 
-        uint256 interest_ratio_per_second_10_10 = uint256(
-            int256(1 + uint256(default_monthly_interest_10_3) / 1000).pow(1/*385802469e-7*/) * 10 ** 10
-        ); // MT: change day value of 30 to a value that corresponds to amount of days in actual month when func is called
-        // TD: test how to convert back after multiplying to an int
-        uint256 accumulated_interest = passed_duration ** (interest_ratio_per_second_10_10 / 10 ** 10);
-        out_reward_ = investment + investment * accumulated_interest 
-            * (1 + uint64(channel_modifier_10_5_) / 1000) * channel_score_difference_ratio_10_7_ / 10 ** 7 
-            * (1 + investment_instance.donation_modifier_10_2 / 100) * 11 / 10;
+        (uint256 interest_ratio_earned_integer, uint256 interest_ratio_earned_fractional_18) = (10, 10) /*MathLibrary.pow(
+            (1 + uint256(default_daily_interest_10_3) / 1000) * 1000,
+            1000,
+            passed_duration, 
+            86400  // MT: change day value of 30 to a value that corresponds to amount of days in actual month when func is called <= get curr month
+        )*/;
+        return investment + (investment 
+            * (interest_ratio_earned_integer + interest_ratio_earned_fractional_18 / 10 ** 18)
+            * (1 + uint64(channel_modifier_10_5_) / 1000) * (channel_score_difference_ratio_10_7_ / 10 ** 7)
+            * (1 + investment_instance.donation_modifier_10_2 / 100)
+        ); // MT: generate float output and convert by token decimals
     }
 
     function calculateEarlyReward (bytes32 subscription_id_) public view returns (uint) {
@@ -195,7 +206,7 @@ contract InvestmentMechanism { // it did not show abstract error when inheriting
             investment_instance.channel_popularity_modifier_10_5
         ); // D: how to retrieve channel's profit modifier? \/ write func ˇ Sol <= score
         return reward - reward * early_unlock_penalty_per_day_10_3 
-            * block.timestamp - investment_instance.lock_start / 86400 / 1000;
+            * (block.timestamp - investment_instance.lock_start) / 86400 / 1000;
     }
 
     function rebalanceTokenAllocation(address recipient_) public onlyAuthorized {
